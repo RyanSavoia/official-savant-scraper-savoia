@@ -69,7 +69,8 @@ def parse_batter_name(lineup_string):
     
     return name
 
-def get_pitcher_arsenal(pitcher_name, all_arsenals):
+def get_pitcher_arsenal_with_usage(pitcher_name, all_arsenals):
+    """Get pitcher's arsenal with usage rates"""
     last_name = pitcher_name.split(',')[0].lower()
     pitcher_data = all_arsenals.filter(
         pl.col('last_name, first_name').str.to_lowercase().str.contains(last_name)
@@ -83,19 +84,69 @@ def get_pitcher_arsenal(pitcher_name, all_arsenals):
     pitch_types = {
         'ff': 'Four-Seam', 'si': 'Sinker', 'fc': 'Cutter',
         'sl': 'Slider', 'ch': 'Changeup', 'cu': 'Curveball',
-        'st': 'Sweeper', 'fs': 'Splitter', 'kn': 'Knuckleball'
+        'st': 'Sweeper', 'fs': 'Splitter', 'kn': 'Knuckleball',
+        'sv': 'Slurve'
     }
     
     arsenal = {}
+    total_usage = 0.0
+    
+    # First pass: collect all pitches with usage > 0
     for abbr, full_name in pitch_types.items():
         speed_col = f'{abbr}_avg_speed'
+        usage_col = f'{abbr}_usage_rate'
+        
         if speed_col in pitcher_row and pitcher_row[speed_col] is not None:
-            arsenal[abbr.upper()] = {
-                'name': full_name,
-                'avg_speed': pitcher_row[speed_col]
-            }
+            usage = pitcher_row.get(usage_col, 0.0) or 0.0
+            if usage > 0:
+                arsenal[abbr.upper()] = {
+                    'name': full_name,
+                    'avg_speed': pitcher_row[speed_col],
+                    'usage_rate': usage / 100.0  # Convert to decimal
+                }
+                total_usage += usage
+    
+    # Normalize usage rates to ensure they sum to 1.0
+    if total_usage > 0:
+        for pitch in arsenal.values():
+            pitch['usage_rate'] = pitch['usage_rate'] * (100.0 / total_usage)
     
     return arsenal
+
+def calculate_weighted_average(batter_stats, pitcher_arsenal):
+    """Calculate weighted batting average based on pitch usage"""
+    if not batter_stats or not pitcher_arsenal:
+        return None
+    
+    weighted_sum = 0.0
+    total_weight = 0.0
+    pitch_performances = []
+    
+    for stat in batter_stats:
+        pitch_type = stat['pitch_type']
+        ba = stat.get('ba')
+        
+        if ba is not None and pitch_type in pitcher_arsenal:
+            usage_rate = pitcher_arsenal[pitch_type]['usage_rate']
+            weighted_sum += ba * usage_rate
+            total_weight += usage_rate
+            
+            pitch_performances.append({
+                'pitch_type': pitch_type,
+                'ba': ba,
+                'usage_rate': usage_rate,
+                'weighted_contribution': ba * usage_rate
+            })
+    
+    if total_weight > 0:
+        weighted_avg = weighted_sum / total_weight
+        return {
+            'weighted_avg': weighted_avg,
+            'pitch_performances': pitch_performances,
+            'coverage': total_weight  # What % of pitcher's arsenal we have data for
+        }
+    
+    return None
 
 def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
     """Get batter's stats against specific pitch types"""
@@ -151,14 +202,14 @@ if __name__ == "__main__":
     
     print(f"Processing {len(api_data)} games...")
     
-    # Load Statcast data for current season with min_pa=1 to get ALL batters
+    # Load Statcast data for current season
     print(f"Loading {SEASON_YEAR} MLB data from Baseball Savant...")
     all_arsenals = statcast_pitch_arsenals_leaderboard(SEASON_YEAR)
     print(f"Loaded {len(all_arsenals)} pitchers")
     
-    # CRITICAL CHANGE: Use min_pa=1 to get all batters
+    # Use min_pa=1 to get all batters
     all_batter_stats = statcast_pitch_arsenal_stats_leaderboard(SEASON_YEAR, min_pa=1)
-    print(f"Loaded {len(all_batter_stats)} batter records (with min_pa=1)")
+    print(f"Loaded {len(all_batter_stats)} batter records")
     
     # Process matchups
     all_reports = []
@@ -171,9 +222,9 @@ if __name__ == "__main__":
         away_pitcher = parse_pitcher_name(matchup['away_pitcher'])
         home_pitcher = parse_pitcher_name(matchup['home_pitcher'])
         
-        # Get arsenals
-        away_arsenal = get_pitcher_arsenal(away_pitcher, all_arsenals)
-        home_arsenal = get_pitcher_arsenal(home_pitcher, all_arsenals)
+        # Get arsenals with usage rates
+        away_arsenal = get_pitcher_arsenal_with_usage(away_pitcher, all_arsenals)
+        home_arsenal = get_pitcher_arsenal_with_usage(home_pitcher, all_arsenals)
         
         # Build report
         game_report = {
@@ -196,42 +247,55 @@ if __name__ == "__main__":
             'batters_missing': 0
         }
         
-        # Process ALL batters (not just top 3)
+        # Process away team batters vs home pitcher
         if home_arsenal:
             for batter_string in matchup['away_lineup']:
                 batter_name = parse_batter_name(batter_string)
                 stats = get_batter_vs_pitches(batter_name, list(home_arsenal.keys()), all_batter_stats)
                 
-                if stats and any(s['ba'] is not None for s in stats):
-                    valid_stats = [s for s in stats if s['ba'] is not None]
-                    avg_ba = sum(s['ba'] for s in valid_stats) / len(valid_stats)
-                    game_report['key_matchups'].append({
-                        'batter': batter_name,
-                        'team': matchup['away_team'],
-                        'vs_pitcher': home_pitcher,
-                        'avg_ba': avg_ba,
-                        'pitch_stats': stats
-                    })
-                    game_report['batters_found'] += 1
+                if stats:
+                    # Calculate weighted average
+                    weighted_result = calculate_weighted_average(stats, home_arsenal)
+                    
+                    if weighted_result:
+                        game_report['key_matchups'].append({
+                            'batter': batter_name,
+                            'team': matchup['away_team'],
+                            'vs_pitcher': home_pitcher,
+                            'weighted_avg_ba': round(weighted_result['weighted_avg'], 3),
+                            'arsenal_coverage': round(weighted_result['coverage'], 2),
+                            'pitch_breakdown': weighted_result['pitch_performances'],
+                            'pitch_stats': stats
+                        })
+                        game_report['batters_found'] += 1
+                    else:
+                        game_report['batters_missing'] += 1
                 else:
                     game_report['batters_missing'] += 1
         
+        # Process home team batters vs away pitcher
         if away_arsenal:
             for batter_string in matchup['home_lineup']:
                 batter_name = parse_batter_name(batter_string)
                 stats = get_batter_vs_pitches(batter_name, list(away_arsenal.keys()), all_batter_stats)
                 
-                if stats and any(s['ba'] is not None for s in stats):
-                    valid_stats = [s for s in stats if s['ba'] is not None]
-                    avg_ba = sum(s['ba'] for s in valid_stats) / len(valid_stats)
-                    game_report['key_matchups'].append({
-                        'batter': batter_name,
-                        'team': matchup['home_team'],
-                        'vs_pitcher': away_pitcher,
-                        'avg_ba': avg_ba,
-                        'pitch_stats': stats
-                    })
-                    game_report['batters_found'] += 1
+                if stats:
+                    # Calculate weighted average
+                    weighted_result = calculate_weighted_average(stats, away_arsenal)
+                    
+                    if weighted_result:
+                        game_report['key_matchups'].append({
+                            'batter': batter_name,
+                            'team': matchup['home_team'],
+                            'vs_pitcher': away_pitcher,
+                            'weighted_avg_ba': round(weighted_result['weighted_avg'], 3),
+                            'arsenal_coverage': round(weighted_result['coverage'], 2),
+                            'pitch_breakdown': weighted_result['pitch_performances'],
+                            'pitch_stats': stats
+                        })
+                        game_report['batters_found'] += 1
+                    else:
+                        game_report['batters_missing'] += 1
                 else:
                     game_report['batters_missing'] += 1
         
@@ -268,3 +332,13 @@ if __name__ == "__main__":
     total_found = sum(r['batters_found'] for r in all_reports)
     total_possible = len(all_reports) * 18
     print(f"\nOverall Coverage: {total_found}/{total_possible} batters ({(total_found/total_possible)*100:.1f}%)")
+    
+    # Show example of weighted calculation
+    if all_reports and all_reports[0]['key_matchups']:
+        example = all_reports[0]['key_matchups'][0]
+        print(f"\nExample weighted calculation for {example['batter']}:")
+        print(f"  Weighted BA: {example['weighted_avg_ba']}")
+        print(f"  Arsenal coverage: {example['arsenal_coverage']*100:.0f}%")
+        if 'pitch_breakdown' in example:
+            for p in example['pitch_breakdown'][:3]:
+                print(f"  - {p['pitch_type']}: {p['ba']:.3f} BA × {p['usage_rate']*100:.1f}% usage = {p['weighted_contribution']:.3f} contribution")
