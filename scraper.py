@@ -7,11 +7,15 @@ import polars as pl
 import json
 import re
 import requests
+import os
 from datetime import datetime
 
 # Your actual API endpoint
 API_URL = "https://mlb-matchup-analysis-api.onrender.com/"
 SEASON_YEAR = 2025  # Current season
+
+# Webhook URL - set this as environment variable on Render
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
 
 def fetch_matchups():
     """Fetch today's matchups from your API"""
@@ -91,6 +95,22 @@ def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
                                      'hard_hit_percent']).to_dicts()
     
     return None
+
+def send_to_webhook(data, webhook_url):
+    """Send data to webhook"""
+    if not webhook_url:
+        print("Warning: No webhook URL configured")
+        return False
+    
+    try:
+        print(f"Sending data to webhook: {webhook_url}")
+        response = requests.post(webhook_url, json=data, timeout=30)
+        response.raise_for_status()
+        print(f"Successfully sent data to webhook. Status: {response.status_code}")
+        return True
+    except Exception as e:
+        print(f"Error sending to webhook: {e}")
+        return False
 
 if __name__ == "__main__":
     print(f"Baseball Scraper running at {datetime.now()}")
@@ -173,12 +193,40 @@ if __name__ == "__main__":
         
         all_reports.append(game_report)
     
-    # Save reports
+    # Create final payload
+    final_data = {
+        'timestamp': timestamp,
+        'date': datetime.now().strftime("%Y-%m-%d"),
+        'games_processed': len(all_reports),
+        'reports': all_reports
+    }
+    
+    # Save locally for backup
     output_filename = f"mlb_matchups_{timestamp}.json"
     with open(output_filename, "w") as f:
-        json.dump(all_reports, f, indent=2)
+        json.dump(final_data, f, indent=2)
     
     print(f"\n{'='*60}")
     print(f"Scraping complete! Processed {len(all_reports)} games")
     print(f"Report saved to: {output_filename}")
+    
+    # Send to webhook if configured
+    if WEBHOOK_URL:
+        print(f"\nWebhook URL configured: {WEBHOOK_URL}")
+        success = send_to_webhook(final_data, WEBHOOK_URL)
+        if success:
+            print("Data successfully sent to webhook!")
+        else:
+            print("Failed to send data to webhook")
+    else:
+        print("\nNo webhook URL configured - data only saved locally")
+        print("Set WEBHOOK_URL environment variable to enable webhook")
+    
     print(f"{'='*60}")
+    
+    # Print summary for logs
+    print("\nSummary of key matchups:")
+    for report in all_reports[:3]:  # Show first 3 games
+        print(f"\n{report['matchup']}:")
+        for matchup in report['key_matchups'][:2]:  # Show top 2 batters per game
+            print(f"  {matchup['batter']} vs {matchup['vs_pitcher']}: {matchup['avg_ba']:.3f} AVG")
