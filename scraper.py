@@ -40,17 +40,36 @@ def parse_pitcher_name(pitcher_string):
 
 def parse_batter_name(lineup_string):
     """Extract batter name from various lineup formats"""
-    if re.match(r'^[A-Z0-9]{1,2}\s+\([LRS]\)', lineup_string):
-        cleaned = re.sub(r'^[A-Z0-9]{1,2}\s+\([LRS]\)\s+', '', lineup_string)
-        cleaned = re.sub(r'\s+\d+$', '', cleaned)
-    else:
-        cleaned = re.sub(r'^\d+\s+', '', lineup_string)
-        cleaned = re.sub(r'\s*\([LRS]\)\s*[A-Z0-9]{1,2}$', '', cleaned)
+    # Remove numbers from start/end
+    cleaned = re.sub(r'^\d+\s+', '', lineup_string)
+    cleaned = re.sub(r'\s+\d+$', '', cleaned)
     
-    name = cleaned.strip()
+    # Remove handedness indicators (L), (R), (S)
+    cleaned = re.sub(r'\([LRS]\)', '', cleaned)
+    
+    # Remove position abbreviations (must be 1-2 uppercase letters at word boundaries)
+    # Common positions: C, 1B, 2B, 3B, SS, LF, CF, RF, DH
+    position_pattern = r'\b(C|1B|2B|3B|SS|LF|CF|RF|DH)\b'
+    cleaned = re.sub(position_pattern, '', cleaned)
+    
+    # Clean up extra spaces
+    name = ' '.join(cleaned.split()).strip()
+    
+    # Split name parts
     parts = name.split()
+    
+    # Handle names properly
     if len(parts) >= 2:
-        return f"{parts[-1]}, {' '.join(parts[:-1])}"
+        # Handle cases like "Ronald Acuña Jr." - Jr. is part of last name
+        if parts[-1].lower() in ['jr', 'jr.', 'sr', 'sr.', 'ii', 'iii']:
+            last_name = f"{parts[-2]} {parts[-1]}"
+            first_name = ' '.join(parts[:-2])
+        else:
+            last_name = parts[-1]
+            first_name = ' '.join(parts[:-1])
+        
+        return f"{last_name}, {first_name}"
+    
     return name
 
 def get_pitcher_arsenal(pitcher_name, all_arsenals):
@@ -60,6 +79,7 @@ def get_pitcher_arsenal(pitcher_name, all_arsenals):
     )
     
     if len(pitcher_data) == 0:
+        print(f"  ⚠️  No arsenal data found for: {pitcher_name}")
         return None
     
     pitcher_row = pitcher_data.row(0, named=True)
@@ -139,6 +159,9 @@ if __name__ == "__main__":
         away_pitcher = parse_pitcher_name(matchup['away_pitcher'])
         home_pitcher = parse_pitcher_name(matchup['home_pitcher'])
         
+        print(f"  Away: {matchup['away_pitcher']} → {away_pitcher}")
+        print(f"  Home: {matchup['home_pitcher']} → {home_pitcher}")
+        
         # Get arsenals
         away_arsenal = get_pitcher_arsenal(away_pitcher, all_arsenals)
         home_arsenal = get_pitcher_arsenal(home_pitcher, all_arsenals)
@@ -150,10 +173,12 @@ if __name__ == "__main__":
             'pitchers': {
                 'away': {
                     'name': away_pitcher,
+                    'original_name': matchup['away_pitcher'],
                     'arsenal': away_arsenal
                 },
                 'home': {
                     'name': home_pitcher,
+                    'original_name': matchup['home_pitcher'],
                     'arsenal': home_arsenal
                 }
             },
@@ -228,5 +253,8 @@ if __name__ == "__main__":
     print("\nSummary of key matchups:")
     for report in all_reports[:3]:  # Show first 3 games
         print(f"\n{report['matchup']}:")
-        for matchup in report['key_matchups'][:2]:  # Show top 2 batters per game
-            print(f"  {matchup['batter']} vs {matchup['vs_pitcher']}: {matchup['avg_ba']:.3f} AVG")
+        if report['key_matchups']:
+            for matchup in report['key_matchups'][:2]:  # Show top 2 batters per game
+                print(f"  {matchup['batter']} vs {matchup['vs_pitcher']}: {matchup['avg_ba']:.3f} AVG")
+        else:
+            print("  No matchup data available")
