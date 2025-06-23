@@ -11,6 +11,7 @@ from datetime import datetime
 
 # Your actual API endpoint
 API_URL = "https://mlb-matchup-analysis-api.onrender.com/"
+SEASON_YEAR = 2025  # Current season
 
 def fetch_matchups():
     """Fetch today's matchups from your API"""
@@ -102,10 +103,10 @@ if __name__ == "__main__":
     
     print(f"Processing {len(api_data)} games...")
     
-    # Load Statcast data
-    print("Loading 2024 MLB data from Baseball Savant...")
-    all_arsenals = statcast_pitch_arsenals_leaderboard(2024)
-    all_batter_stats = statcast_pitch_arsenal_stats_leaderboard(2024)
+    # Load Statcast data for current season
+    print(f"Loading {SEASON_YEAR} MLB data from Baseball Savant...")
+    all_arsenals = statcast_pitch_arsenals_leaderboard(SEASON_YEAR)
+    all_batter_stats = statcast_pitch_arsenal_stats_leaderboard(SEASON_YEAR)
     
     # Process matchups
     all_reports = []
