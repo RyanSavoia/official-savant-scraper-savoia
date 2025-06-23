@@ -1,0 +1,9 @@
+﻿# Output files
+*.json
+*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
