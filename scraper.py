@@ -102,19 +102,37 @@ def get_pitcher_arsenal(pitcher_name, all_arsenals):
     return arsenal
 
 def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
+    """Get batter's stats against specific pitch types - with better error handling"""
     last_name = batter_name.split(',')[0].lower()
+    
+    # First try exact last name match
     batter_data = all_batter_stats.filter(
         pl.col('last_name, first_name').str.to_lowercase().str.contains(last_name)
     )
     
-    if len(batter_data) > 0:
-        batter_data = batter_data.filter(pl.col('pitch_type').is_in(pitch_types))
-        
-        if len(batter_data) > 0:
-            return batter_data.select(['pitch_type', 'ba', 'est_ba', 'slg', 
-                                     'hard_hit_percent']).to_dicts()
+    if len(batter_data) == 0:
+        # Try alternative spellings or partial matches
+        # For names like "García" try without accent
+        last_name_no_accent = last_name.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n')
+        if last_name_no_accent != last_name:
+            batter_data = all_batter_stats.filter(
+                pl.col('last_name, first_name').str.to_lowercase().str.contains(last_name_no_accent)
+            )
     
-    return None
+    if len(batter_data) > 0:
+        # Filter by pitch types
+        batter_pitch_data = batter_data.filter(pl.col('pitch_type').is_in(pitch_types))
+        
+        if len(batter_pitch_data) > 0:
+            return batter_pitch_data.select(['pitch_type', 'ba', 'est_ba', 'slg', 
+                                           'hard_hit_percent']).to_dicts()
+        else:
+            # Player exists but no data against these pitch types
+            print(f"    ⚠️  {batter_name} found but no data vs pitch types: {pitch_types}")
+            return None
+    else:
+        print(f"    ⚠️  No batting data found for: {batter_name}")
+        return None
 
 def send_to_webhook(data, webhook_url):
     """Send data to webhook"""
@@ -148,12 +166,15 @@ if __name__ == "__main__":
     all_arsenals = statcast_pitch_arsenals_leaderboard(SEASON_YEAR)
     all_batter_stats = statcast_pitch_arsenal_stats_leaderboard(SEASON_YEAR)
     
+    print(f"Loaded {len(all_arsenals)} pitchers and {len(all_batter_stats)} batter records")
+    
     # Process matchups
     all_reports = []
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     for i, matchup in enumerate(api_data):
-        print(f"\nProcessing Game {i+1}: {matchup['away_team']} @ {matchup['home_team']}")
+        print(f"\n{'='*50}")
+        print(f"Processing Game {i+1}: {matchup['away_team']} @ {matchup['home_team']}")
         
         # Parse pitcher names
         away_pitcher = parse_pitcher_name(matchup['away_pitcher'])
@@ -182,17 +203,21 @@ if __name__ == "__main__":
                     'arsenal': home_arsenal
                 }
             },
-            'key_matchups': []
+            'key_matchups': [],
+            'missing_data': []  # Track what's missing
         }
         
-        # Get key batter matchups (top 3 from each team)
+        # Process away team batters vs home pitcher
         if home_arsenal:
-            for batter_string in matchup['away_lineup'][:3]:
+            print(f"\n  Checking {matchup['away_team']} batters vs {home_pitcher}:")
+            for j, batter_string in enumerate(matchup['away_lineup'][:3]):
                 batter_name = parse_batter_name(batter_string)
+                print(f"    Batter {j+1}: {batter_string} → {batter_name}")
                 stats = get_batter_vs_pitches(batter_name, list(home_arsenal.keys()), all_batter_stats)
                 
-                if stats:
-                    avg_ba = sum(s['ba'] for s in stats if s['ba']) / len([s for s in stats if s['ba']])
+                if stats and any(s['ba'] is not None for s in stats):
+                    valid_stats = [s for s in stats if s['ba'] is not None]
+                    avg_ba = sum(s['ba'] for s in valid_stats) / len(valid_stats)
                     game_report['key_matchups'].append({
                         'batter': batter_name,
                         'team': matchup['away_team'],
@@ -200,14 +225,23 @@ if __name__ == "__main__":
                         'avg_ba': avg_ba,
                         'pitch_stats': stats
                     })
+                    print(f"      ✓ Found data: {avg_ba:.3f} AVG")
+                else:
+                    game_report['missing_data'].append(f"{batter_name} vs {home_pitcher}")
+        else:
+            print(f"  ⚠️  No arsenal for {home_pitcher}, skipping {matchup['away_team']} batters")
         
+        # Process home team batters vs away pitcher
         if away_arsenal:
-            for batter_string in matchup['home_lineup'][:3]:
+            print(f"\n  Checking {matchup['home_team']} batters vs {away_pitcher}:")
+            for j, batter_string in enumerate(matchup['home_lineup'][:3]):
                 batter_name = parse_batter_name(batter_string)
+                print(f"    Batter {j+1}: {batter_string} → {batter_name}")
                 stats = get_batter_vs_pitches(batter_name, list(away_arsenal.keys()), all_batter_stats)
                 
-                if stats:
-                    avg_ba = sum(s['ba'] for s in stats if s['ba']) / len([s for s in stats if s['ba']])
+                if stats and any(s['ba'] is not None for s in stats):
+                    valid_stats = [s for s in stats if s['ba'] is not None]
+                    avg_ba = sum(s['ba'] for s in valid_stats) / len(valid_stats)
                     game_report['key_matchups'].append({
                         'batter': batter_name,
                         'team': matchup['home_team'],
@@ -215,6 +249,11 @@ if __name__ == "__main__":
                         'avg_ba': avg_ba,
                         'pitch_stats': stats
                     })
+                    print(f"      ✓ Found data: {avg_ba:.3f} AVG")
+                else:
+                    game_report['missing_data'].append(f"{batter_name} vs {away_pitcher}")
+        else:
+            print(f"  ⚠️  No arsenal for {away_pitcher}, skipping {matchup['home_team']} batters")
         
         all_reports.append(game_report)
     
@@ -249,12 +288,16 @@ if __name__ == "__main__":
     
     print(f"{'='*60}")
     
-    # Print summary for logs
-    print("\nSummary of key matchups:")
-    for report in all_reports[:3]:  # Show first 3 games
-        print(f"\n{report['matchup']}:")
-        if report['key_matchups']:
-            for matchup in report['key_matchups'][:2]:  # Show top 2 batters per game
-                print(f"  {matchup['batter']} vs {matchup['vs_pitcher']}: {matchup['avg_ba']:.3f} AVG")
-        else:
-            print("  No matchup data available")
+    # Print summary
+    print("\nSummary:")
+    total_matchups = sum(len(r['key_matchups']) for r in all_reports)
+    total_missing = sum(len(r['missing_data']) for r in all_reports)
+    print(f"  Found {total_matchups} batter vs pitcher matchups")
+    print(f"  Missing data for {total_missing} potential matchups")
+    
+    # Show games with no data
+    for report in all_reports:
+        if not report['key_matchups']:
+            print(f"\n  ⚠️  No matchups found for {report['matchup']}")
+            if report['missing_data']:
+                print(f"     Missing: {', '.join(report['missing_data'][:3])}")
