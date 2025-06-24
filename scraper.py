@@ -120,6 +120,7 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
     
     # Initialize weighted sums
     weighted_ba = 0.0
+    weighted_est_ba = 0.0
     weighted_whiff = 0.0
     weighted_k_rate = 0.0
     weighted_hard_hit = 0.0
@@ -135,12 +136,14 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
             
             # Get metrics (handle None values)
             ba = stat.get('ba', 0) if stat.get('ba') is not None else 0
+            est_ba = stat.get('est_ba', 0) if stat.get('est_ba') is not None else 0
             whiff = stat.get('whiff_percent', 0) if stat.get('whiff_percent') is not None else 0
             k_rate = stat.get('k_percent', 0) if stat.get('k_percent') is not None else 0
             hard_hit = stat.get('hard_hit_percent', 0) if stat.get('hard_hit_percent') is not None else 0
             
             # Calculate weighted values
             weighted_ba += ba * usage_rate
+            weighted_est_ba += est_ba * usage_rate
             weighted_whiff += whiff * usage_rate
             weighted_k_rate += k_rate * usage_rate
             weighted_hard_hit += hard_hit * usage_rate
@@ -151,6 +154,7 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
                 'pitch_type': pitch_type,
                 'pitch_name': pitcher_arsenal[pitch_type]['name'],
                 'ba': ba,
+                'est_ba': est_ba,
                 'whiff_percent': whiff,
                 'k_percent': k_rate,
                 'hard_hit_percent': hard_hit,
@@ -163,6 +167,7 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
         # Calculate final weighted averages
         result = {
             'weighted_ba': weighted_ba / total_weight,
+            'weighted_est_ba': weighted_est_ba / total_weight,
             'weighted_whiff': weighted_whiff / total_weight,
             'weighted_k_rate': weighted_k_rate / total_weight,
             'weighted_hard_hit': weighted_hard_hit / total_weight,
@@ -318,6 +323,7 @@ if __name__ == "__main__":
                             'team': matchup['away_team'],
                             'vs_pitcher': home_pitcher,
                             'weighted_avg_ba': round(weighted_result['weighted_ba'], 3),
+                            'weighted_est_ba': round(weighted_result['weighted_est_ba'], 3),
                             'weighted_whiff': round(weighted_result['weighted_whiff'], 1),
                             'weighted_k_rate': round(weighted_result['weighted_k_rate'], 1),
                             'weighted_hard_hit': round(weighted_result['weighted_hard_hit'], 1),
@@ -350,6 +356,7 @@ if __name__ == "__main__":
                             'team': matchup['home_team'],
                             'vs_pitcher': away_pitcher,
                             'weighted_avg_ba': round(weighted_result['weighted_ba'], 3),
+                            'weighted_est_ba': round(weighted_result['weighted_est_ba'], 3),
                             'weighted_whiff': round(weighted_result['weighted_whiff'], 1),
                             'weighted_k_rate': round(weighted_result['weighted_k_rate'], 1),
                             'weighted_hard_hit': round(weighted_result['weighted_hard_hit'], 1),
@@ -412,9 +419,11 @@ if __name__ == "__main__":
             print("\n=== TOP 5 MATCHUPS FOR BATTERS ===")
             for m in sorted_matchups[:5]:
                 print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  BA: {m['weighted_avg_ba']:.3f}, Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
+                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
+                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
             
             print("\n=== WORST 5 MATCHUPS FOR BATTERS ===")
             for m in sorted_matchups[-5:]:
                 print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  BA: {m['weighted_avg_ba']:.3f}, Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
+                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
+                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
