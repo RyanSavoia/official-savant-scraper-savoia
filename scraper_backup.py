@@ -208,49 +208,6 @@ def calculate_matchup_score(metrics):
     
     return round(composite, 1)
 
-def calculate_pitcher_arsenal_stats(key_matchups, pitcher_name, pitcher_arsenal):
-    """Calculate aggregate stats for each of the pitcher's pitch types"""
-    if not key_matchups or not pitcher_arsenal:
-        return pitcher_arsenal
-    
-    # Get all batters facing this pitcher
-    pitcher_matchups = [m for m in key_matchups if m['vs_pitcher'] == pitcher_name]
-    
-    if not pitcher_matchups:
-        return pitcher_arsenal
-    
-    # For each pitch type in the arsenal, calculate average opponent stats
-    for pitch_type in pitcher_arsenal.keys():
-        # Collect stats for this pitch type across all batters
-        pitch_stats = []
-        total_pa = 0
-        
-        for matchup in pitcher_matchups:
-            for stat in matchup['pitch_stats']:
-                if stat['pitch_type'] == pitch_type:
-                    pitch_stats.append(stat)
-                    total_pa += stat.get('pa', 0)
-        
-        if pitch_stats:
-            # Calculate weighted averages (weighted by PA)
-            if total_pa > 0:
-                weighted_ba = sum((stat.get('ba') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_slg = sum((stat.get('slg') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_whiff = sum(stat.get('whiff_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_k_rate = sum(stat.get('k_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                
-                # Add opponent stats to arsenal
-                pitcher_arsenal[pitch_type].update({
-                    'opponent_ba': round(weighted_ba, 3),
-                    'opponent_slg': round(weighted_slg, 3),
-                    'opponent_whiff_pct': round(weighted_whiff, 1),
-                    'opponent_k_pct': round(weighted_k_rate, 1),
-                    'total_pa_against': total_pa
-                })
-    
-    return pitcher_arsenal
-
-
 def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
     """Get batter's stats against specific pitch types"""
     last_name = batter_name.split(',')[0].lower()
@@ -416,23 +373,6 @@ if __name__ == "__main__":
                 else:
                     game_report['batters_missing'] += 1
         
-        # Calculate pitcher arsenal stats after processing all batters
-        if game_report['key_matchups']:
-            if away_arsenal:
-                away_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    away_pitcher, 
-                    away_arsenal
-                )
-                game_report['pitchers']['away']['arsenal'] = away_arsenal
-            
-            if home_arsenal:
-                home_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    home_pitcher, 
-                    home_arsenal
-                )
-                game_report['pitchers']['home']['arsenal'] = home_arsenal
         print(f"  Found: {game_report['batters_found']}/18 batters")
         all_reports.append(game_report)
     

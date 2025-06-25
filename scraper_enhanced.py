@@ -1,4 +1,4 @@
-ï»¿import pybaseballstats
+import pybaseballstats
 from pybaseballstats.statcast_leaderboards import (
     statcast_pitch_arsenals_leaderboard,
     statcast_pitch_arsenal_stats_leaderboard
@@ -120,7 +120,6 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
     
     # Initialize weighted sums
     weighted_ba = 0.0
-    weighted_est_ba = 0.0
     weighted_whiff = 0.0
     weighted_k_rate = 0.0
     weighted_hard_hit = 0.0
@@ -136,14 +135,12 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
             
             # Get metrics (handle None values)
             ba = stat.get('ba', 0) if stat.get('ba') is not None else 0
-            est_ba = stat.get('est_ba', 0) if stat.get('est_ba') is not None else 0
             whiff = stat.get('whiff_percent', 0) if stat.get('whiff_percent') is not None else 0
             k_rate = stat.get('k_percent', 0) if stat.get('k_percent') is not None else 0
             hard_hit = stat.get('hard_hit_percent', 0) if stat.get('hard_hit_percent') is not None else 0
             
             # Calculate weighted values
             weighted_ba += ba * usage_rate
-            weighted_est_ba += est_ba * usage_rate
             weighted_whiff += whiff * usage_rate
             weighted_k_rate += k_rate * usage_rate
             weighted_hard_hit += hard_hit * usage_rate
@@ -154,31 +151,28 @@ def calculate_weighted_metrics(batter_stats, pitcher_arsenal):
                 'pitch_type': pitch_type,
                 'pitch_name': pitcher_arsenal[pitch_type]['name'],
                 'ba': ba,
-                'est_ba': est_ba,
                 'whiff_percent': whiff,
                 'k_percent': k_rate,
                 'hard_hit_percent': hard_hit,
                 'usage_rate': usage_rate,
-                'weighted_contribution': ba * usage_rate,
-                'pa': stat.get('pa', 0)
+                'weighted_contribution': ba * usage_rate
             })
     
     if total_weight > 0:
         # Calculate final weighted averages
         result = {
             'weighted_ba': weighted_ba / total_weight,
-            'weighted_est_ba': weighted_est_ba / total_weight,
             'weighted_whiff': weighted_whiff / total_weight,
             'weighted_k_rate': weighted_k_rate / total_weight,
             'weighted_hard_hit': weighted_hard_hit / total_weight,
             'pitch_performances': pitch_performances,
-            'coverage': total_weight,
-            'total_pa': total_pa,
-            'reliability': 'HIGH' if total_pa >= 50 else 'MEDIUM' if total_pa >= 20 else 'LOW'
+            'coverage': total_weight
         }
         
         # Calculate a composite matchup score
         matchup_score = calculate_matchup_score(result)
+        result['total_pa'] = total_pa
+        result['reliability'] = 'HIGH' if total_pa >= 50 else 'MEDIUM' if total_pa >= 20 else 'LOW'
         result['matchup_score'] = matchup_score
         
         return result
@@ -208,49 +202,6 @@ def calculate_matchup_score(metrics):
     
     return round(composite, 1)
 
-def calculate_pitcher_arsenal_stats(key_matchups, pitcher_name, pitcher_arsenal):
-    """Calculate aggregate stats for each of the pitcher's pitch types"""
-    if not key_matchups or not pitcher_arsenal:
-        return pitcher_arsenal
-    
-    # Get all batters facing this pitcher
-    pitcher_matchups = [m for m in key_matchups if m['vs_pitcher'] == pitcher_name]
-    
-    if not pitcher_matchups:
-        return pitcher_arsenal
-    
-    # For each pitch type in the arsenal, calculate average opponent stats
-    for pitch_type in pitcher_arsenal.keys():
-        # Collect stats for this pitch type across all batters
-        pitch_stats = []
-        total_pa = 0
-        
-        for matchup in pitcher_matchups:
-            for stat in matchup['pitch_stats']:
-                if stat['pitch_type'] == pitch_type:
-                    pitch_stats.append(stat)
-                    total_pa += stat.get('pa', 0)
-        
-        if pitch_stats:
-            # Calculate weighted averages (weighted by PA)
-            if total_pa > 0:
-                weighted_ba = sum((stat.get('ba') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_slg = sum((stat.get('slg') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_whiff = sum(stat.get('whiff_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_k_rate = sum(stat.get('k_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                
-                # Add opponent stats to arsenal
-                pitcher_arsenal[pitch_type].update({
-                    'opponent_ba': round(weighted_ba, 3),
-                    'opponent_slg': round(weighted_slg, 3),
-                    'opponent_whiff_pct': round(weighted_whiff, 1),
-                    'opponent_k_pct': round(weighted_k_rate, 1),
-                    'total_pa_against': total_pa
-                })
-    
-    return pitcher_arsenal
-
-
 def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
     """Get batter's stats against specific pitch types"""
     last_name = batter_name.split(',')[0].lower()
@@ -262,7 +213,7 @@ def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
     
     if len(batter_data) == 0:
         # Try without accents
-        last_name_no_accent = last_name.replace('Ã¡', 'a').replace('Ã©', 'e').replace('Ã­', 'i').replace('Ã³', 'o').replace('Ãº', 'u').replace('Ã±', 'n')
+        last_name_no_accent = last_name.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u').replace('ñ', 'n')
         if last_name_no_accent != last_name:
             batter_data = all_batter_stats.filter(
                 pl.col('last_name, first_name').str.to_lowercase().str.contains(last_name_no_accent)
@@ -274,7 +225,7 @@ def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
         
         if len(batter_pitch_data) > 0:
             return batter_pitch_data.select(['pitch_type', 'ba', 'est_ba', 'slg', 
-                                           'hard_hit_percent', 'whiff_percent', 'k_percent', 'pa']).to_dicts()
+                                           'hard_hit_percent', 'whiff_percent', 'k_percent']).to_dicts()
     
     return None
 
@@ -366,14 +317,13 @@ if __name__ == "__main__":
                             'team': matchup['away_team'],
                             'vs_pitcher': home_pitcher,
                             'weighted_avg_ba': round(weighted_result['weighted_ba'], 3),
-                            'weighted_est_ba': round(weighted_result['weighted_est_ba'], 3),
                             'weighted_whiff': round(weighted_result['weighted_whiff'], 1),
                             'weighted_k_rate': round(weighted_result['weighted_k_rate'], 1),
                             'weighted_hard_hit': round(weighted_result['weighted_hard_hit'], 1),
                             'matchup_score': weighted_result['matchup_score'],
-                            'arsenal_coverage': round(weighted_result['coverage'], 2),
                             'total_pa': weighted_result['total_pa'],
                             'reliability': weighted_result['reliability'],
+                            'arsenal_coverage': round(weighted_result['coverage'], 2),
                             'pitch_breakdown': weighted_result['pitch_performances'],
                             'pitch_stats': stats
                         })
@@ -399,14 +349,13 @@ if __name__ == "__main__":
                             'team': matchup['home_team'],
                             'vs_pitcher': away_pitcher,
                             'weighted_avg_ba': round(weighted_result['weighted_ba'], 3),
-                            'weighted_est_ba': round(weighted_result['weighted_est_ba'], 3),
                             'weighted_whiff': round(weighted_result['weighted_whiff'], 1),
                             'weighted_k_rate': round(weighted_result['weighted_k_rate'], 1),
                             'weighted_hard_hit': round(weighted_result['weighted_hard_hit'], 1),
                             'matchup_score': weighted_result['matchup_score'],
-                            'arsenal_coverage': round(weighted_result['coverage'], 2),
                             'total_pa': weighted_result['total_pa'],
                             'reliability': weighted_result['reliability'],
+                            'arsenal_coverage': round(weighted_result['coverage'], 2),
                             'pitch_breakdown': weighted_result['pitch_performances'],
                             'pitch_stats': stats
                         })
@@ -416,23 +365,6 @@ if __name__ == "__main__":
                 else:
                     game_report['batters_missing'] += 1
         
-        # Calculate pitcher arsenal stats after processing all batters
-        if game_report['key_matchups']:
-            if away_arsenal:
-                away_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    away_pitcher, 
-                    away_arsenal
-                )
-                game_report['pitchers']['away']['arsenal'] = away_arsenal
-            
-            if home_arsenal:
-                home_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    home_pitcher, 
-                    home_arsenal
-                )
-                game_report['pitchers']['home']['arsenal'] = home_arsenal
         print(f"  Found: {game_report['batters_found']}/18 batters")
         all_reports.append(game_report)
     
@@ -462,7 +394,7 @@ if __name__ == "__main__":
     
     print(f"{'='*60}")
     
-    # Print summary
+    # Print summary with new metrics
     total_found = sum(r['batters_found'] for r in all_reports)
     total_possible = len(all_reports) * 18
     print(f"\nOverall Coverage: {total_found}/{total_possible} batters ({(total_found/total_possible)*100:.1f}%)")
@@ -479,11 +411,9 @@ if __name__ == "__main__":
             print("\n=== TOP 5 MATCHUPS FOR BATTERS ===")
             for m in sorted_matchups[:5]:
                 print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
-                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
+                print(f"  BA: {m['weighted_avg_ba']:.3f}, Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%")
             
             print("\n=== WORST 5 MATCHUPS FOR BATTERS ===")
             for m in sorted_matchups[-5:]:
                 print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
-                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
+                print(f"  BA: {m['weighted_avg_ba']:.3f}, Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%")
