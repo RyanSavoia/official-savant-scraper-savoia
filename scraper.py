@@ -1,8 +1,9 @@
-﻿import pybaseballstats
+import pybaseballstats
 from pybaseballstats.statcast_leaderboards import (
     statcast_pitch_arsenals_leaderboard,
     statcast_pitch_arsenal_stats_leaderboard
 )
+from pybaseballstats.fangraphs import fangraphs_batting_range, fangraphs_pitching_range
 import polars as pl
 import json
 import re
@@ -16,6 +17,60 @@ SEASON_YEAR = 2025  # Current season
 
 # Webhook URL - set this as environment variable on Render
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
+
+def load_baseline_stats(season_year):
+   """Load baseline season stats from FanGraphs"""
+   try:
+       print("📊 Loading baseline season stats from FanGraphs...")
+       batting_baselines = fangraphs_batting_range(start_year=season_year, end_year=season_year, min_pa=50)
+       pitching_baselines = fangraphs_pitching_range(start_year=season_year, end_year=season_year, min_ip=10)
+       print(f"   Loaded {len(batting_baselines)} batters and {len(pitching_baselines)} pitchers")
+       return batting_baselines, pitching_baselines
+   except Exception as e:
+       print(f"   Warning: Could not load baseline stats: {e}")
+       return None, None
+
+def get_batter_baseline(batter_name, batting_baselines):
+   """Get batter's season baseline stats"""
+   if batting_baselines is None:
+       return None
+   try:
+       last_name = batter_name.split(',')[0].strip()
+       matching_batters = batting_baselines.filter(
+           pl.col('Name').str.to_lowercase().str.contains(last_name.lower())
+       )
+       if len(matching_batters) > 0:
+           batter_row = matching_batters.row(0, named=True)
+           return {
+               'season_avg': batter_row.get('AVG', 0.248),
+               'season_k_pct': batter_row.get('K%', 0.235) * 100 if batter_row.get('K%') else 23.5,
+               'season_ops': batter_row.get('OPS', 0.735),
+               'season_pa': batter_row.get('PA', 0)
+           }
+   except Exception as e:
+       print(f"   Warning: Error getting baseline for {batter_name}: {e}")
+   return None
+
+def get_pitcher_baseline(pitcher_name, pitching_baselines):
+   """Get pitcher's season baseline stats"""
+   if pitching_baselines is None:
+       return None
+   try:
+       last_name = pitcher_name.split(',')[0].strip()
+       matching_pitchers = pitching_baselines.filter(
+           pl.col('Name').str.to_lowercase().str.contains(last_name.lower())
+       )
+       if len(matching_pitchers) > 0:
+           pitcher_row = matching_pitchers.row(0, named=True)
+           return {
+               'season_k_pct': pitcher_row.get('K%', 0.235) * 100 if pitcher_row.get('K%') else 23.5,
+               'season_era': pitcher_row.get('ERA', 4.25),
+               'season_whip': pitcher_row.get('WHIP', 1.28),
+               'season_ip': pitcher_row.get('IP', 0)
+           }
+   except Exception as e:
+       print(f"   Warning: Error getting baseline for {pitcher_name}: {e}")
+   return None
 
 def fetch_matchups():
     """Fetch today's matchups from your API"""
@@ -208,49 +263,6 @@ def calculate_matchup_score(metrics):
     
     return round(composite, 1)
 
-def calculate_pitcher_arsenal_stats(key_matchups, pitcher_name, pitcher_arsenal):
-    """Calculate aggregate stats for each of the pitcher's pitch types"""
-    if not key_matchups or not pitcher_arsenal:
-        return pitcher_arsenal
-    
-    # Get all batters facing this pitcher
-    pitcher_matchups = [m for m in key_matchups if m['vs_pitcher'] == pitcher_name]
-    
-    if not pitcher_matchups:
-        return pitcher_arsenal
-    
-    # For each pitch type in the arsenal, calculate average opponent stats
-    for pitch_type in pitcher_arsenal.keys():
-        # Collect stats for this pitch type across all batters
-        pitch_stats = []
-        total_pa = 0
-        
-        for matchup in pitcher_matchups:
-            for stat in matchup['pitch_stats']:
-                if stat['pitch_type'] == pitch_type:
-                    pitch_stats.append(stat)
-                    total_pa += stat.get('pa', 0)
-        
-        if pitch_stats:
-            # Calculate weighted averages (weighted by PA)
-            if total_pa > 0:
-                weighted_ba = sum((stat.get('ba') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_slg = sum((stat.get('slg') or 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_whiff = sum(stat.get('whiff_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                weighted_k_rate = sum(stat.get('k_percent', 0) * stat.get('pa', 0) for stat in pitch_stats) / total_pa
-                
-                # Add opponent stats to arsenal
-                pitcher_arsenal[pitch_type].update({
-                    'opponent_ba': round(weighted_ba, 3),
-                    'opponent_slg': round(weighted_slg, 3),
-                    'opponent_whiff_pct': round(weighted_whiff, 1),
-                    'opponent_k_pct': round(weighted_k_rate, 1),
-                    'total_pa_against': total_pa
-                })
-    
-    return pitcher_arsenal
-
-
 def get_batter_vs_pitches(batter_name, pitch_types, all_batter_stats):
     """Get batter's stats against specific pitch types"""
     last_name = batter_name.split(',')[0].lower()
@@ -313,6 +325,9 @@ if __name__ == "__main__":
     # Use min_pa=1 to get all batters
     all_batter_stats = statcast_pitch_arsenal_stats_leaderboard(SEASON_YEAR, min_pa=1)
     print(f"Loaded {len(all_batter_stats)} batter records")
+
+    # Load baseline stats from FanGraphs
+    batting_baselines, pitching_baselines = load_baseline_stats(SEASON_YEAR)
     
     # Process matchups
     all_reports = []
@@ -328,6 +343,10 @@ if __name__ == "__main__":
         # Get arsenals with usage rates
         away_arsenal = get_pitcher_arsenal_with_usage(away_pitcher, all_arsenals)
         home_arsenal = get_pitcher_arsenal_with_usage(home_pitcher, all_arsenals)
+
+        # Get pitcher baselines
+        away_pitcher_baseline = get_pitcher_baseline(away_pitcher, pitching_baselines)
+        home_pitcher_baseline = get_pitcher_baseline(home_pitcher, pitching_baselines)
         
         # Build report
         game_report = {
@@ -337,12 +356,14 @@ if __name__ == "__main__":
                 'away': {
                     'name': away_pitcher,
                     'original_name': matchup['away_pitcher'],
-                    'arsenal': away_arsenal
+                    'arsenal': away_arsenal,
+                    'baseline_stats': away_pitcher_baseline
                 },
                 'home': {
                     'name': home_pitcher,
                     'original_name': matchup['home_pitcher'],
-                    'arsenal': home_arsenal
+                    'arsenal': home_arsenal,
+                    'baseline_stats': home_pitcher_baseline
                 }
             },
             'key_matchups': [],
@@ -361,6 +382,9 @@ if __name__ == "__main__":
                     weighted_result = calculate_weighted_metrics(stats, home_arsenal)
                     
                     if weighted_result:
+                        # Get batter baseline
+                        batter_baseline = get_batter_baseline(batter_name, batting_baselines)
+
                         game_report['key_matchups'].append({
                             'batter': batter_name,
                             'team': matchup['away_team'],
@@ -375,7 +399,8 @@ if __name__ == "__main__":
                             'total_pa': weighted_result['total_pa'],
                             'reliability': weighted_result['reliability'],
                             'pitch_breakdown': weighted_result['pitch_performances'],
-                            'pitch_stats': stats
+                            'pitch_stats': stats,
+                            'baseline_stats': batter_baseline
                         })
                         game_report['batters_found'] += 1
                     else:
@@ -394,6 +419,9 @@ if __name__ == "__main__":
                     weighted_result = calculate_weighted_metrics(stats, away_arsenal)
                     
                     if weighted_result:
+                        # Get batter baseline
+                        batter_baseline = get_batter_baseline(batter_name, batting_baselines)
+
                         game_report['key_matchups'].append({
                             'batter': batter_name,
                             'team': matchup['home_team'],
@@ -408,7 +436,8 @@ if __name__ == "__main__":
                             'total_pa': weighted_result['total_pa'],
                             'reliability': weighted_result['reliability'],
                             'pitch_breakdown': weighted_result['pitch_performances'],
-                            'pitch_stats': stats
+                            'pitch_stats': stats,
+                            'baseline_stats': batter_baseline
                         })
                         game_report['batters_found'] += 1
                     else:
@@ -416,23 +445,6 @@ if __name__ == "__main__":
                 else:
                     game_report['batters_missing'] += 1
         
-        # Calculate pitcher arsenal stats after processing all batters
-        if game_report['key_matchups']:
-            if away_arsenal:
-                away_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    away_pitcher, 
-                    away_arsenal
-                )
-                game_report['pitchers']['away']['arsenal'] = away_arsenal
-            
-            if home_arsenal:
-                home_arsenal = calculate_pitcher_arsenal_stats(
-                    game_report['key_matchups'], 
-                    home_pitcher, 
-                    home_arsenal
-                )
-                game_report['pitchers']['home']['arsenal'] = home_arsenal
         print(f"  Found: {game_report['batters_found']}/18 batters")
         all_reports.append(game_report)
     
@@ -467,23 +479,22 @@ if __name__ == "__main__":
     total_possible = len(all_reports) * 18
     print(f"\nOverall Coverage: {total_found}/{total_possible} batters ({(total_found/total_possible)*100:.1f}%)")
     
-    # Show best/worst matchups
+    # Show examples with baseline comparisons
     if all_reports:
         all_matchups = []
         for report in all_reports:
             all_matchups.extend(report['key_matchups'])
         
         if all_matchups:
-            sorted_matchups = sorted(all_matchups, key=lambda x: x['matchup_score'], reverse=True)
-            
-            print("\n=== TOP 5 MATCHUPS FOR BATTERS ===")
-            for m in sorted_matchups[:5]:
-                print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
-                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
-            
-            print("\n=== WORST 5 MATCHUPS FOR BATTERS ===")
-            for m in sorted_matchups[-5:]:
-                print(f"{m['batter']} vs {m['vs_pitcher']}: {m['matchup_score']} score")
-                print(f"  Actual BA: {m['weighted_avg_ba']:.3f}, Expected BA: {m['weighted_est_ba']:.3f}")
-                print(f"  Whiff: {m['weighted_whiff']:.1f}%, K: {m['weighted_k_rate']:.1f}%, PA: {m['total_pa']} ({m['reliability']})")
+            print("\n=== EXAMPLE MATCHUPS WITH BASELINE COMPARISONS ===")
+            for m in all_matchups[:3]:
+                print(f"{m['batter']} vs {m['vs_pitcher']}")
+                print(f"  Weighted BA: {m['weighted_avg_ba']:.3f}, K-rate: {m['weighted_k_rate']:.1f}%")
+                if m.get('baseline_stats'):
+                    baseline = m['baseline_stats']
+                    ba_diff = m['weighted_avg_ba'] - baseline['season_avg']
+                    k_diff = m['weighted_k_rate'] - baseline['season_k_pct']
+                    print(f"  Season BA: {baseline['season_avg']:.3f} (vs pitcher: {ba_diff:+.3f})")
+                    print(f"  Season K%: {baseline['season_k_pct']:.1f}% (vs pitcher: {k_diff:+.1f}%)")
+                    print(f"  Season OPS: {baseline['season_ops']:.3f}")
+                print()
